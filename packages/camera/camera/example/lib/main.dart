@@ -124,6 +124,7 @@ class _CameraExampleHomeState extends State<CameraExampleHome>
       onNewCameraSelected(cameraController.description);
     }
   }
+
   // #enddocregion AppLifecycle
 
   @override
@@ -581,6 +582,10 @@ class _CameraExampleHomeState extends State<CameraExampleHome>
         return;
       }
 
+      if (controller != null && controller!.value.isRecordingVideo) {
+        return switchCameraDescriptionWhileRecording(description);
+      }
+
       onNewCameraSelected(description);
     }
 
@@ -598,10 +603,7 @@ class _CameraExampleHomeState extends State<CameraExampleHome>
               title: Icon(getCameraLensIcon(cameraDescription.lensDirection)),
               groupValue: controller?.description,
               value: cameraDescription,
-              onChanged:
-                  controller != null && controller!.value.isRecordingVideo
-                      ? null
-                      : onChanged,
+              onChanged: onChanged,
             ),
           ),
         );
@@ -631,6 +633,13 @@ class _CameraExampleHomeState extends State<CameraExampleHome>
     );
     cameraController.setExposurePoint(offset);
     cameraController.setFocusPoint(offset);
+  }
+
+  /// switch camera mid recording
+  void switchCameraDescriptionWhileRecording(
+    CameraDescription cameraDescription,
+  ) {
+    controller?.setDescriptionWhileRecording(cameraDescription);
   }
 
   Future<void> onNewCameraSelected(CameraDescription cameraDescription) async {
