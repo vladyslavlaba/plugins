@@ -202,6 +202,9 @@
       [result sendSuccess];
     } else if ([@"startVideoRecording" isEqualToString:call.method]) {
       [_camera startVideoRecordingWithResult:result];
+    } else if ([@"setDescriptionWhileRecording" isEqualToString:call.method]){
+        NSString *cameraName = call.arguments[@"cameraName"];
+        [_camera setDescriptionWhileVideoRecording:cameraName result:result];
     } else if ([@"stopVideoRecording" isEqualToString:call.method]) {
       [_camera stopVideoRecordingWithResult:result];
     } else if ([@"pauseVideoRecording" isEqualToString:call.method]) {

@@ -15,32 +15,40 @@ class CameraValue {
   /// Creates a new camera controller state.
   const CameraValue({
     required this.isInitialized,
+    this.errorDescription,
     this.previewSize,
     required this.isRecordingVideo,
     required this.isTakingPicture,
     required this.isStreamingImages,
-    required this.isRecordingPaused,
+    required bool isRecordingPaused,
     required this.flashMode,
     required this.exposureMode,
     required this.focusMode,
+    required this.exposurePointSupported,
+    required this.focusPointSupported,
     required this.deviceOrientation,
+    required this.description,
     this.lockedCaptureOrientation,
     this.recordingOrientation,
     this.isPreviewPaused = false,
     this.previewPauseOrientation,
-  });
+  }) : _isRecordingPaused = isRecordingPaused;
 
   /// Creates a new camera controller state for an uninitialized controller.
-  const CameraValue.uninitialized()
-      : this(
+  const CameraValue.uninitialized({
+    required CameraDescription description,
+  }) : this(
           isInitialized: false,
+          description: description,
           isRecordingVideo: false,
           isTakingPicture: false,
           isStreamingImages: false,
           isRecordingPaused: false,
           flashMode: FlashMode.auto,
           exposureMode: ExposureMode.auto,
+          exposurePointSupported: false,
           focusMode: FocusMode.auto,
+          focusPointSupported: false,
           deviceOrientation: DeviceOrientation.portraitUp,
           isPreviewPaused: false,
         );
@@ -57,8 +65,7 @@ class CameraValue {
   /// True when images from the camera are being streamed.
   final bool isStreamingImages;
 
-  /// True when video recording is paused.
-  final bool isRecordingPaused;
+  final bool _isRecordingPaused;
 
   /// True when the preview widget has been paused manually.
   final bool isPreviewPaused;
@@ -66,10 +73,29 @@ class CameraValue {
   /// Set to the orientation the preview was paused in, if it is currently paused.
   final DeviceOrientation? previewPauseOrientation;
 
+  /// True when camera [isRecordingVideo] and recording is paused.
+  bool get isRecordingPaused => isRecordingVideo && _isRecordingPaused;
+
+  /// Description of an error state.
+  ///
+  /// This is null while the controller is not in an error state.
+  /// When [hasError] is true this contains the error description.
+  final String? errorDescription;
+
   /// The size of the preview in pixels.
   ///
   /// Is `null` until [isInitialized] is `true`.
   final Size? previewSize;
+
+  /// Convenience getter for `previewSize.width / previewSize.height`.
+  ///
+  /// Can only be called when [initialize] is done.
+  double get aspectRatio => previewSize!.width / previewSize!.height;
+
+  /// Whether the controller is in an error state.
+  ///
+  /// When true [errorDescription] describes the error.
+  bool get hasError => errorDescription != null;
 
   /// The flash mode the camera is currently set to.
   final FlashMode flashMode;
@@ -79,6 +105,12 @@ class CameraValue {
 
   /// The focus mode the camera is currently set to.
   final FocusMode focusMode;
+
+  /// Whether setting the exposure point is supported.
+  final bool exposurePointSupported;
+
+  /// Whether setting the focus point is supported.
+  final bool focusPointSupported;
 
   /// The current device UI orientation.
   final DeviceOrientation deviceOrientation;
@@ -92,6 +124,9 @@ class CameraValue {
   /// The orientation of the currently running video recording.
   final DeviceOrientation? recordingOrientation;
 
+  /// The properties of the camera device controlled by this controller.
+  final CameraDescription description;
+
   /// Creates a modified copy of the object.
   ///
   /// Explicitly specified fields get the specified value, all other fields get
@@ -99,8 +134,10 @@ class CameraValue {
   CameraValue copyWith({
     bool? isInitialized,
     bool? isRecordingVideo,
+    CameraDescription? description,
     bool? isTakingPicture,
     bool? isStreamingImages,
+    String? errorDescription,
     Size? previewSize,
     bool? isRecordingPaused,
     FlashMode? flashMode,
@@ -116,14 +153,19 @@ class CameraValue {
   }) {
     return CameraValue(
       isInitialized: isInitialized ?? this.isInitialized,
+      description: description ?? this.description,
+      errorDescription: errorDescription,
       previewSize: previewSize ?? this.previewSize,
       isRecordingVideo: isRecordingVideo ?? this.isRecordingVideo,
       isTakingPicture: isTakingPicture ?? this.isTakingPicture,
       isStreamingImages: isStreamingImages ?? this.isStreamingImages,
-      isRecordingPaused: isRecordingPaused ?? this.isRecordingPaused,
+      isRecordingPaused: isRecordingPaused ?? _isRecordingPaused,
       flashMode: flashMode ?? this.flashMode,
       exposureMode: exposureMode ?? this.exposureMode,
       focusMode: focusMode ?? this.focusMode,
+      exposurePointSupported:
+          exposurePointSupported ?? this.exposurePointSupported,
+      focusPointSupported: focusPointSupported ?? this.focusPointSupported,
       deviceOrientation: deviceOrientation ?? this.deviceOrientation,
       lockedCaptureOrientation: lockedCaptureOrientation == null
           ? this.lockedCaptureOrientation
@@ -143,11 +185,14 @@ class CameraValue {
     return '${objectRuntimeType(this, 'CameraValue')}('
         'isRecordingVideo: $isRecordingVideo, '
         'isInitialized: $isInitialized, '
+        'errorDescription: $errorDescription, '
         'previewSize: $previewSize, '
         'isStreamingImages: $isStreamingImages, '
         'flashMode: $flashMode, '
         'exposureMode: $exposureMode, '
         'focusMode: $focusMode, '
+        'exposurePointSupported: $exposurePointSupported, '
+        'focusPointSupported: $focusPointSupported, '
         'deviceOrientation: $deviceOrientation, '
         'lockedCaptureOrientation: $lockedCaptureOrientation, '
         'recordingOrientation: $recordingOrientation, '
@@ -165,14 +210,14 @@ class CameraValue {
 class CameraController extends ValueNotifier<CameraValue> {
   /// Creates a new camera controller in an uninitialized state.
   CameraController(
-    this.description,
+    CameraDescription description,
     this.resolutionPreset, {
     this.enableAudio = true,
     this.imageFormatGroup,
-  }) : super(const CameraValue.uninitialized());
+  }) : super(CameraValue.uninitialized(description: description));
 
   /// The properties of the camera device controlled by this controller.
-  final CameraDescription description;
+  CameraDescription get description => value.description;
 
   /// The resolution this controller is targeting.
   ///
@@ -432,6 +477,21 @@ class CameraController extends ValueNotifier<CameraValue> {
     // the controller has already been disposed.
     if (!_isDisposed) {
       super.removeListener(listener);
+    }
+  }
+
+  Future<void> setDescriptionWhileRecording(
+    CameraDescription description,
+  ) async {
+    try {
+      if (!value.isRecordingVideo) {
+        throw CameraException('setDescription', 'Video was not recording');
+      }
+
+      await CameraPlatform.instance.setDescriptionWhileRecording(description);
+      value = value.copyWith(description: description);
+    } on PlatformException catch (e) {
+      throw CameraException(e.code, e.message);
     }
   }
 }

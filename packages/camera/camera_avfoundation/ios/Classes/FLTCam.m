@@ -622,6 +622,80 @@ NSString *const errorMethod = @"error";
   return pixelBuffer;
 }
 
+- (void)setDescriptionWhileVideoRecording:(NSString *)cameraName
+                          result:(FLTThreadSafeFlutterResult *)result {
+    
+    // dont allow setting description if not recording
+    if (!_isRecording) {
+        [result sendErrorWithCode:@"setDescription" message:@"Video was not recording" details:nil];
+        return;
+    }
+    
+    // get new capture device
+    _captureDevice = [AVCaptureDevice deviceWithUniqueID:cameraName];
+    
+    AVCaptureInput *_oldInput = _captureVideoInput;
+    AVCaptureVideoDataOutput *_oldOutput = _captureVideoOutput;
+    AVCaptureConnection *_oldConnection = [_oldOutput connectionWithMediaType:AVMediaTypeVideo];
+    
+    // stop video capture from old output
+    // this also automatically removes old output's connection from captureSession
+    [_oldOutput setSampleBufferDelegate:nil queue:nil];
+    
+    // get new video input
+    NSError *error = nil;
+    AVCaptureInput *_newInput = [AVCaptureDeviceInput deviceInputWithDevice:_captureDevice
+                                                                      error:&error];
+    
+    if (error) {
+        [result sendError:error];
+    }
+    
+    // get new output
+    AVCaptureVideoDataOutput *_newOutput = [AVCaptureVideoDataOutput new];
+    _newOutput.videoSettings = _oldOutput.videoSettings;
+    [_newOutput setAlwaysDiscardsLateVideoFrames:YES];
+    [_newOutput setSampleBufferDelegate:self queue:dispatch_get_main_queue()];
+    
+    AVCaptureConnection *_newConnection =
+    [AVCaptureConnection connectionWithInputPorts:_newInput.ports
+                                           output:_newOutput];
+    // set mirrored if needed
+    if ([_captureDevice position] == AVCaptureDevicePositionFront) {
+        _newConnection.videoMirrored = YES;
+    }
+    
+   // keep orientation
+    if (_oldConnection && _newConnection.isVideoOrientationSupported) {
+        _newConnection.videoOrientation = _oldConnection.videoOrientation;
+    }
+    
+    // replace old with new in session
+    [_captureSession beginConfiguration];
+    [_captureSession removeInput:_oldInput];
+    [_captureSession removeOutput:_oldOutput];
+    
+    if(![_captureSession canAddInput:_newInput])
+        [result sendErrorWithCode:@"VideoError" message:@"Unable switch video input" details:nil];
+    
+    [_captureSession addInputWithNoConnections:_newInput];
+    
+    if(![_captureSession canAddOutput:_newOutput])
+        [result sendErrorWithCode:@"VideoError" message:@"Unable switch video output" details:nil];
+
+    [_captureSession addOutputWithNoConnections:_newOutput];
+    
+    if(![_captureSession canAddConnection:_newConnection])
+        [result sendErrorWithCode:@"VideoError" message:@"Unable switch video connection" details:nil];
+    
+    [_captureSession addConnection:_newConnection];
+    _captureVideoInput = _newInput;
+    _captureVideoOutput = _newOutput;
+    [_captureSession commitConfiguration];
+    
+    [result sendSuccess];
+}
+
 - (void)startVideoRecordingWithResult:(FLTThreadSafeFlutterResult *)result {
   if (!_isRecording) {
     NSError *error;
