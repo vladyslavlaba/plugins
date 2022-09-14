@@ -9,7 +9,6 @@ import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
-import 'package:gallery_saver/gallery_saver.dart';
 import 'package:video_player/video_player.dart';
 
 /// Camera example home widget.
@@ -739,8 +738,6 @@ class _CameraExampleHomeState extends State<CameraExampleHome>
           videoController = null;
         });
         if (file != null) {
-          saveGallery(file, isImage: true);
-
           showInSnackBar('Picture saved to ${file.path}');
         }
       }
@@ -843,7 +840,6 @@ class _CameraExampleHomeState extends State<CameraExampleHome>
         setState(() {});
       }
       if (file != null) {
-        saveGallery(file);
         showInSnackBar('Video recorded to ${file.path}');
         videoFile = file;
         _startVideoPlayer();
@@ -1058,14 +1054,6 @@ class _CameraExampleHomeState extends State<CameraExampleHome>
     } on CameraException catch (e) {
       _showCameraException(e);
       return null;
-    }
-  }
-
-  Future<void> saveGallery(XFile file, {bool isImage = false}) async {
-    if (isImage) {
-      await GallerySaver.saveImage(file.path);
-    } else {
-      await GallerySaver.saveVideo(file.path);
     }
   }
 
