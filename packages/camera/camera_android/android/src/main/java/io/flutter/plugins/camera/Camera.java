@@ -79,24 +79,6 @@ interface ErrorCallback {
   void onError(String errorCode, String errorMessage);
 }
 
-/** A mockable wrapper for CameraDevice calls. */
-interface CameraDeviceWrapper {
-  @NonNull
-  CaptureRequest.Builder createCaptureRequest(int templateType) throws CameraAccessException;
-
-  @TargetApi(VERSION_CODES.P)
-  void createCaptureSession(SessionConfiguration config) throws CameraAccessException;
-
-  @TargetApi(VERSION_CODES.LOLLIPOP)
-  void createCaptureSession(
-      @NonNull List<Surface> outputs,
-      @NonNull CameraCaptureSession.StateCallback callback,
-      @Nullable Handler handler)
-      throws CameraAccessException;
-
-  void close();
-}
-
 class Camera
     implements CameraCaptureCallback.CameraCaptureStateListener,
         ImageReader.OnImageAvailableListener {
@@ -115,13 +97,14 @@ class Camera
    * Holds all of the camera features/settings and will be used to update the request builder when
    * one changes.
    */
-  private final CameraFeatures cameraFeatures;
+  private CameraFeatures cameraFeatures;
 
   private final SurfaceTextureEntry flutterTexture;
   private final boolean enableAudio;
   private final Context applicationContext;
   private final DartMessenger dartMessenger;
-  private final CameraProperties cameraProperties;
+  private CameraProperties cameraProperties;
+  private final ResolutionPreset resolutionPreset;
   private final CameraFeatureFactory cameraFeatureFactory;
   private final Activity activity;
   /** A {@link CameraCaptureSession.CaptureCallback} that handles events related to JPEG capture. */
@@ -132,14 +115,13 @@ class Camera
   /** An additional thread for running tasks that shouldn't block the UI. */
   private HandlerThread backgroundHandlerThread;
 
-  private CameraDeviceWrapper cameraDevice;
+  private CameraDevice cameraDevice;
   private CameraCaptureSession captureSession;
   private ImageReader pictureImageReader;
   private ImageReader imageStreamReader;
   /** {@link CaptureRequest.Builder} for the camera preview */
   private CaptureRequest.Builder previewRequestBuilder;
 
-  private MediaRecorder mediaRecorder;
   /** True when recording video. */
   private boolean recordingVideo;
   /** True when the preview is paused. */
@@ -154,43 +136,10 @@ class Camera
 
   private MethodChannel.Result flutterResult;
 
-  /** A CameraDeviceWrapper implementation that forwards calls to a CameraDevice. */
-  private class DefaultCameraDeviceWrapper implements CameraDeviceWrapper {
-    private final CameraDevice cameraDevice;
+  private Recorder recorder;
 
-    private DefaultCameraDeviceWrapper(CameraDevice cameraDevice) {
-      this.cameraDevice = cameraDevice;
-    }
-
-    @NonNull
-    @Override
-    public CaptureRequest.Builder createCaptureRequest(int templateType)
-        throws CameraAccessException {
-      return cameraDevice.createCaptureRequest(templateType);
-    }
-
-    @TargetApi(VERSION_CODES.P)
-    @Override
-    public void createCaptureSession(SessionConfiguration config) throws CameraAccessException {
-      cameraDevice.createCaptureSession(config);
-    }
-
-    @TargetApi(VERSION_CODES.LOLLIPOP)
-    @SuppressWarnings("deprecation")
-    @Override
-    public void createCaptureSession(
-        @NonNull List<Surface> outputs,
-        @NonNull CameraCaptureSession.StateCallback callback,
-        @Nullable Handler handler)
-        throws CameraAccessException {
-      cameraDevice.createCaptureSession(outputs, callback, backgroundHandler);
-    }
-
-    @Override
-    public void close() {
-      cameraDevice.close();
-    }
-  }
+  // we don't want to close or dispose while setting camera description mid video recording
+  private boolean settingDescription = false;
 
   public Camera(
       final Activity activity,
@@ -212,8 +161,8 @@ class Camera
     this.cameraProperties = cameraProperties;
     this.cameraFeatureFactory = cameraFeatureFactory;
     this.cameraFeatures =
-        CameraFeatures.init(
-            cameraFeatureFactory, cameraProperties, activity, dartMessenger, resolutionPreset);
+            CameraFeatures.init(cameraFeatureFactory, cameraProperties, activity, dartMessenger, resolutionPreset);
+    this.resolutionPreset = resolutionPreset;
 
     // Create capture callback.
     captureTimeouts = new CaptureTimeoutsWrapper(3000, 3000);
@@ -248,106 +197,60 @@ class Camera
   private void prepareMediaRecorder(String outputFilePath) throws IOException {
     Log.i(TAG, "prepareMediaRecorder");
 
-    if (mediaRecorder != null) {
-      mediaRecorder.release();
+    if(recorder != null){
+      recorder.close();
     }
-
-    final PlatformChannel.DeviceOrientation lockedOrientation =
-        ((SensorOrientationFeature) cameraFeatures.getSensorOrientation())
-            .getLockedCaptureOrientation();
-
-    MediaRecorderBuilder mediaRecorderBuilder;
-
-    if (Build.VERSION.SDK_INT >= 31) {
-      mediaRecorderBuilder = new MediaRecorderBuilder(getRecordingProfile(), outputFilePath);
-    } else {
-      mediaRecorderBuilder = new MediaRecorderBuilder(getRecordingProfileLegacy(), outputFilePath);
-    }
-
-    mediaRecorder =
-        mediaRecorderBuilder
-            .setEnableAudio(enableAudio)
-            .setMediaOrientation(
-                lockedOrientation == null
-                    ? getDeviceOrientationManager().getVideoOrientation()
-                    : getDeviceOrientationManager().getVideoOrientation(lockedOrientation))
-            .build();
+    recorder = new Recorder(outputFilePath,cameraFeatures, enableAudio);
   }
 
   @SuppressLint("MissingPermission")
-  public void open(String imageFormatGroup) throws CameraAccessException {
-    final ResolutionFeature resolutionFeature = cameraFeatures.getResolution();
-
-    if (!resolutionFeature.checkIsSupported()) {
-      // Tell the user that the camera they are trying to open is not supported,
-      // as its {@link android.media.CamcorderProfile} cannot be fetched due to the name
-      // not being a valid parsable integer.
-      dartMessenger.sendCameraErrorEvent(
-          "Camera with name \""
-              + cameraProperties.getCameraName()
-              + "\" is not supported by this plugin.");
-      return;
-    }
-
-    // Always capture using JPEG format.
-    pictureImageReader =
-        ImageReader.newInstance(
-            resolutionFeature.getCaptureSize().getWidth(),
-            resolutionFeature.getCaptureSize().getHeight(),
-            ImageFormat.JPEG,
-            1);
-
-    // For image streaming, use the provided image format or fall back to YUV420.
-    Integer imageFormat = supportedImageFormats.get(imageFormatGroup);
-    if (imageFormat == null) {
-      Log.w(TAG, "The selected imageFormatGroup is not supported by Android. Defaulting to yuv420");
-      imageFormat = ImageFormat.YUV_420_888;
-    }
-    imageStreamReader =
-        ImageReader.newInstance(
-            resolutionFeature.getPreviewSize().getWidth(),
-            resolutionFeature.getPreviewSize().getHeight(),
-            imageFormat,
-            1);
-
+  private void openCamera() throws CameraAccessException {
     // Open the camera.
+    ResolutionFeature resolutionFeature = cameraFeatures.getResolution();
     CameraManager cameraManager = CameraUtils.getCameraManager(activity);
     cameraManager.openCamera(
-        cameraProperties.getCameraName(),
-        new CameraDevice.StateCallback() {
-          @Override
-          public void onOpened(@NonNull CameraDevice device) {
-            cameraDevice = new DefaultCameraDeviceWrapper(device);
-            try {
-              startPreview();
-              dartMessenger.sendCameraInitializedEvent(
-                  resolutionFeature.getPreviewSize().getWidth(),
-                  resolutionFeature.getPreviewSize().getHeight(),
-                  cameraFeatures.getExposureLock().getValue(),
-                  cameraFeatures.getAutoFocus().getValue(),
-                  cameraFeatures.getExposurePoint().checkIsSupported(),
-                  cameraFeatures.getFocusPoint().checkIsSupported());
-            } catch (CameraAccessException e) {
-              dartMessenger.sendCameraErrorEvent(e.getMessage());
-              close();
-            }
-          }
+            cameraProperties.getCameraName(),
+            new CameraDevice.StateCallback() {
+                @Override
+                public void onOpened(@NonNull CameraDevice device) {
+                    cameraDevice = device;
+                    try {
+                        // wer are opening the camera while we are already recording a video
+                        if (recordingVideo) {
+                            createCaptureSession(
+                                    CameraDevice.TEMPLATE_RECORD, () -> recorder.setPaused(false), recorder.getInputSurface());
+                        } else {
+                            startPreview();
+                        }
+                        dartMessenger.sendCameraInitializedEvent(
+                                resolutionFeature.getPreviewSize().getWidth(),
+                                resolutionFeature.getPreviewSize().getHeight(),
+                                cameraFeatures.getExposureLock().getValue(),
+                                cameraFeatures.getAutoFocus().getValue(),
+                                cameraFeatures.getExposurePoint().checkIsSupported(),
+                                cameraFeatures.getFocusPoint().checkIsSupported());
+                    } catch (CameraAccessException e) {
+                        dartMessenger.sendCameraErrorEvent(e.getMessage());
+                        close();
+                    }
+                }
 
           @Override
           public void onClosed(@NonNull CameraDevice camera) {
             Log.i(TAG, "open | onClosed");
 
-            // Prevents calls to methods that would otherwise result in IllegalStateException exceptions.
-            cameraDevice = null;
-            closeCaptureSession();
             dartMessenger.sendCameraClosingEvent();
+            super.onClosed(camera);
           }
 
           @Override
           public void onDisconnected(@NonNull CameraDevice cameraDevice) {
             Log.i(TAG, "open | onDisconnected");
 
-            close();
+            if (!settingDescription) {
+                close();
+            }
+
             dartMessenger.sendCameraErrorEvent("The camera was disconnected.");
           }
 
@@ -355,7 +258,10 @@ class Camera
           public void onError(@NonNull CameraDevice cameraDevice, int errorCode) {
             Log.i(TAG, "open | onError");
 
-            close();
+            if (!settingDescription) {
+                close();
+            }
+
             String errorDescription;
             switch (errorCode) {
               case ERROR_CAMERA_IN_USE:
@@ -382,16 +288,94 @@ class Camera
         backgroundHandler);
   }
 
-  @VisibleForTesting
-  void createCaptureSession(int templateType, Surface... surfaces) throws CameraAccessException {
+  @SuppressLint("MissingPermission")
+  public void open(String imageFormatGroup) throws CameraAccessException {
+    final ResolutionFeature resolutionFeature = cameraFeatures.getResolution();
+
+    if (!resolutionFeature.checkIsSupported()) {
+      // Tell the user that the camera they are trying to open is not supported,
+      // as its {@link android.media.CamcorderProfile} cannot be fetched due to the name
+      // not being a valid parsable integer.
+      dartMessenger.sendCameraErrorEvent(
+              "Camera with name \""
+                      + cameraProperties.getCameraName()
+                      + "\" is not supported by this plugin.");
+      return;
+    }
+
+    // Always capture using JPEG format.
+    pictureImageReader =
+            ImageReader.newInstance(
+                    resolutionFeature.getCaptureSize().getWidth(),
+                    resolutionFeature.getCaptureSize().getHeight(),
+                    ImageFormat.JPEG,
+                    1);
+
+    // For image streaming, use the provided image format or fall back to YUV420.
+    Integer imageFormat = supportedImageFormats.get(imageFormatGroup);
+    if (imageFormat == null) {
+      Log.w(TAG, "The selected imageFormatGroup is not supported by Android. Defaulting to yuv420");
+      imageFormat = ImageFormat.YUV_420_888;
+    }
+    imageStreamReader =
+            ImageReader.newInstance(
+                    resolutionFeature.getPreviewSize().getWidth(),
+                    resolutionFeature.getPreviewSize().getHeight(),
+                    imageFormat,
+                    1);
+
+    openCamera();
+  }
+
+  private void createCaptureSession(int templateType, Surface... surfaces)
+          throws CameraAccessException {
     createCaptureSession(templateType, null, surfaces);
+  }
+
+  /**
+   * Change camera description mid recording
+   */
+  public void setDescriptionWhileRecording(@NonNull final Result result, CameraProperties properties){
+
+    // only allow setting description while recording
+    if(!recordingVideo){
+      result.error("setDescription", "Video was not recording", null);
+      return;
+    }
+    settingDescription = true;
+    cameraProperties = properties;
+    cameraFeatures.setAutoFocus(
+            cameraFeatureFactory.createAutoFocusFeature(cameraProperties, true));
+    cameraFeatures =  CameraFeatures.init(
+            cameraFeatureFactory, properties, activity, dartMessenger,resolutionPreset);
+    final ResolutionFeature resolutionFeature = cameraFeatures.getResolution();
+
+
+    try {
+      recorder.setPaused(true);
+      captureSession.close();
+      if (cameraDevice != null) {
+        cameraDevice.close();
+        cameraDevice = null;
+      }
+
+      openCamera();
+    }catch(CameraAccessException e){
+      Log.e(TAG, "set description while recording error", e);
+      settingDescription = false;
+      result.error("setDescription", "Failed to set description", null);
+      return;
+    }
+
+
+    result.success(null);
   }
 
   private void createCaptureSession(
       int templateType, Runnable onSuccessCallback, Surface... surfaces)
       throws CameraAccessException {
     // Close any existing capture session.
-    captureSession = null;
+    closeCaptureSession();
 
     // Create a new capture builder.
     previewRequestBuilder = cameraDevice.createCaptureRequest(templateType);
@@ -422,13 +406,11 @@ class Camera
     // Prepare the callback.
     CameraCaptureSession.StateCallback callback =
         new CameraCaptureSession.StateCallback() {
-          boolean captureSessionClosed = false;
-
           @Override
           public void onConfigured(@NonNull CameraCaptureSession session) {
             Log.i(TAG, "CameraCaptureSession onConfigured");
             // Camera was already closed.
-            if (cameraDevice == null || captureSessionClosed) {
+            if (cameraDevice == null) {
               dartMessenger.sendCameraErrorEvent("The camera was closed during configuration.");
               return;
             }
@@ -447,11 +429,11 @@ class Camera
             dartMessenger.sendCameraErrorEvent("Failed to configure camera session.");
           }
 
-          @Override
-          public void onClosed(@NonNull CameraCaptureSession session) {
-            Log.i(TAG, "CameraCaptureSession onClosed");
-            captureSessionClosed = true;
-          }
+//          @Override
+//          public void onClosed(@NonNull CameraCaptureSession session) {
+//            Log.i(TAG, "CameraCaptureSession onClosed");
+//            captureSessionClosed = true;
+//          }
         };
 
     // Start the session.
@@ -515,8 +497,6 @@ class Camera
         onSuccessCallback.run();
       }
 
-    } catch (IllegalStateException e) {
-      onErrorCallback.onError("cameraAccess", "Camera is closed: " + e.getMessage());
     } catch (CameraAccessException e) {
       onErrorCallback.onError("cameraAccess", e.getMessage());
     }
@@ -640,6 +620,7 @@ class Camera
 
     try {
       captureSession.stopRepeating();
+      captureSession.abortCaptures();
       Log.i(TAG, "sending capture request");
       captureSession.capture(stillBuilder.build(), captureCallback, backgroundHandler);
     } catch (CameraAccessException e) {
@@ -671,6 +652,11 @@ class Camera
   public void stopBackgroundThread() {
     if (backgroundHandlerThread != null) {
       backgroundHandlerThread.quitSafely();
+      try {
+        backgroundHandlerThread.join();
+      } catch (InterruptedException e) {
+        dartMessenger.error(flutterResult, "cameraAccess", e.getMessage(), null);
+      }
     }
     backgroundHandlerThread = null;
     backgroundHandler = null;
@@ -753,7 +739,7 @@ class Camera
     recordingVideo = true;
     try {
       createCaptureSession(
-          CameraDevice.TEMPLATE_RECORD, () -> mediaRecorder.start(), mediaRecorder.getSurface());
+              CameraDevice.TEMPLATE_RECORD, () -> recorder.start(), recorder.getInputSurface());
       result.success(null);
     } catch (CameraAccessException e) {
       recordingVideo = false;
@@ -773,11 +759,11 @@ class Camera
     recordingVideo = false;
     try {
       captureSession.abortCaptures();
-      mediaRecorder.stop();
+      recorder.close();
+      recorder = null;
     } catch (CameraAccessException | IllegalStateException e) {
       // Ignore exceptions and try to continue (changes are camera session already aborted capture).
     }
-    mediaRecorder.reset();
     try {
       startPreview();
     } catch (CameraAccessException | IllegalStateException e) {
@@ -796,7 +782,7 @@ class Camera
 
     try {
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-        mediaRecorder.pause();
+        recorder.setPaused(true);
       } else {
         result.error("videoRecordingFailed", "pauseVideoRecording requires Android API +24.", null);
         return;
@@ -817,7 +803,7 @@ class Camera
 
     try {
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-        mediaRecorder.resume();
+        recorder.setPaused(false);
       } else {
         result.error(
             "videoRecordingFailed", "resumeVideoRecording requires Android API +24.", null);
@@ -1168,31 +1154,26 @@ class Camera
 
   public void close() {
     Log.i(TAG, "close");
+    closeCaptureSession();
 
     if (cameraDevice != null) {
       cameraDevice.close();
       cameraDevice = null;
-
-      // Closing the CameraDevice without closing the CameraCaptureSession is recommended
-      // for quickly closing the camera:
-      // https://developer.android.com/reference/android/hardware/camera2/CameraCaptureSession#close()
-      captureSession = null;
-    } else {
-      closeCaptureSession();
     }
 
     if (pictureImageReader != null) {
       pictureImageReader.close();
       pictureImageReader = null;
     }
+
     if (imageStreamReader != null) {
       imageStreamReader.close();
       imageStreamReader = null;
     }
-    if (mediaRecorder != null) {
-      mediaRecorder.reset();
-      mediaRecorder.release();
-      mediaRecorder = null;
+
+    if (recorder != null) {
+      recorder.close();
+      recorder = null;
     }
 
     stopBackgroundThread();
