@@ -197,10 +197,10 @@ class Camera
   private void prepareMediaRecorder(String outputFilePath) throws IOException {
     Log.i(TAG, "prepareMediaRecorder");
 
-    if(recorder != null){
+    if (recorder != null) {
       recorder.close();
     }
-    recorder = new Recorder(outputFilePath,cameraFeatures, enableAudio);
+    recorder = new Recorder(outputFilePath, cameraFeatures, enableAudio);
   }
 
   @SuppressLint("MissingPermission")
@@ -335,10 +335,9 @@ class Camera
   /**
    * Change camera description mid recording
    */
-  public void setDescriptionWhileRecording(@NonNull final Result result, CameraProperties properties){
-
+  public void setDescriptionWhileRecording(@NonNull final Result result, CameraProperties properties) {
     // only allow setting description while recording
-    if(!recordingVideo){
+    if (!recordingVideo) {
       result.error("setDescription", "Video was not recording", null);
       return;
     }
@@ -346,27 +345,26 @@ class Camera
     cameraProperties = properties;
     cameraFeatures.setAutoFocus(
             cameraFeatureFactory.createAutoFocusFeature(cameraProperties, true));
-    cameraFeatures =  CameraFeatures.init(
-            cameraFeatureFactory, properties, activity, dartMessenger,resolutionPreset);
-    final ResolutionFeature resolutionFeature = cameraFeatures.getResolution();
-
+    cameraFeatures = CameraFeatures.init(
+            cameraFeatureFactory, properties, activity, dartMessenger, resolutionPreset);
+    recorder.updateFeatures(cameraFeatures);
 
     try {
       recorder.setPaused(true);
       captureSession.close();
+
       if (cameraDevice != null) {
         cameraDevice.close();
         cameraDevice = null;
       }
 
       openCamera();
-    }catch(CameraAccessException e){
+    } catch (CameraAccessException e) {
       Log.e(TAG, "set description while recording error", e);
       settingDescription = false;
       result.error("setDescription", "Failed to set description", null);
       return;
     }
-
 
     result.success(null);
   }
@@ -466,8 +464,6 @@ class Camera
             callback));
   }
 
-  @TargetApi(VERSION_CODES.LOLLIPOP)
-  @SuppressWarnings("deprecation")
   private void createCaptureSession(
       List<Surface> surfaces, CameraCaptureSession.StateCallback callback)
       throws CameraAccessException {

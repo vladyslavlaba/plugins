@@ -30,7 +30,7 @@ public class Recorder {
 
     // video
     private final MediaCodec videoEncoder;
-    private final Surface videoEncoderSurface;
+    private Surface videoEncoderSurface;
     private int rotation = 0;
     private VideoRenderer videoRenderer;
     static final int I_FRAME_INTERVAL = 15;
@@ -43,7 +43,7 @@ public class Recorder {
 
     // audio
     private MediaCodec audioEncoder;
-    private boolean audioEnabled;
+    private final boolean audioEnabled;
     private AudioRecord audioRecord;
     static final String AUDIO_MIME = "audio/mp4a-latm";
     static final int MAX_INPUT_SIZE = 16384;
@@ -58,8 +58,6 @@ public class Recorder {
     boolean stopped = false;
     private long startTimeUs = -1;
     private boolean paused = false;
-    private final CamcorderProfile profile;
-
 
     // muxer
     private final String outputFilePath;
@@ -82,19 +80,14 @@ public class Recorder {
                 ? orientationManager.getVideoOrientation()
                 : orientationManager.getVideoOrientation(lockedOrientation);
 
-        profile = resolutionFeature.getRecordingProfileLegacy();
+        CamcorderProfile profile = resolutionFeature.getRecordingProfileLegacy();
 
         // setup muxer
         muxer = new MediaMuxer(outputFilePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4);
         muxer.setOrientationHint(rotation);
 
         // setup video encoder
-        MediaFormat videoEncoderFormat = MediaFormat.createVideoFormat(VIDEO_MIME, profile.videoFrameWidth, profile.videoFrameHeight);
-        videoEncoderFormat.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface);
-        videoEncoderFormat.setInteger(MediaFormat.KEY_BIT_RATE, profile.videoBitRate);
-        videoEncoderFormat.setInteger(MediaFormat.KEY_FRAME_RATE, profile.videoFrameRate);
-        videoEncoderFormat.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, I_FRAME_INTERVAL);
-        videoEncoderFormat.setString(MediaFormat.KEY_MIME, VIDEO_MIME);
+        MediaFormat videoEncoderFormat = getVideoFormatForProfile(profile);
         String encoderName = new MediaCodecList(MediaCodecList.REGULAR_CODECS).findEncoderForFormat(videoEncoderFormat);
         videoEncoder = MediaCodec.createByCodecName(encoderName);
         videoEncoder.configure(videoEncoderFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
@@ -102,18 +95,23 @@ public class Recorder {
 
         // setup audio recorder
         if (audioEnabled) {
+            int encoding = AudioFormat.ENCODING_PCM_16BIT;
+            int channel = AudioFormat.CHANNEL_IN_MONO;
+            int source = MediaRecorder.AudioSource.MIC;
+            int sampleRate = profile.audioSampleRate;
+
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 audioRecord = new AudioRecord.Builder()
-                        .setAudioSource(MediaRecorder.AudioSource.MIC)
+                        .setAudioSource(source)
                         .setAudioFormat(new AudioFormat.Builder()
-                                .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                                .setSampleRate(profile.audioSampleRate)
-                                .setChannelMask(AudioFormat.CHANNEL_IN_MONO)
+                                .setEncoding(encoding)
+                                .setSampleRate(sampleRate)
+                                .setChannelMask(channel)
                                 .build())
                         .build();
             } else {
-                // audioRecord = new AudioRecord(); TODO:
-                audioRecord = null;
+                int bufferSize = AudioRecord.getMinBufferSize(sampleRate, channel, encoding);
+                audioRecord = new AudioRecord(source, sampleRate, channel, encoding, bufferSize);
             }
 
             // setup audio encoder
@@ -146,11 +144,33 @@ public class Recorder {
         }
     }
 
+    public void updateFeatures(CameraFeatures cameraFeatures) {
+        final ResolutionFeature resolutionFeature = cameraFeatures.getResolution();
+        CamcorderProfile profile = resolutionFeature.getRecordingProfileLegacy();
+
+        MediaFormat videoEncoderFormat = getVideoFormatForProfile(profile);
+        videoEncoder.configure(videoEncoderFormat, videoEncoderSurface, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
+        videoEncoderSurface = videoEncoder.createInputSurface();
+
+        videoRenderer = new VideoRenderer(videoEncoderSurface, profile.videoFrameWidth, profile.videoFrameHeight);
+        videoRenderer.setRotation(rotation);
+    }
+
+    private MediaFormat getVideoFormatForProfile(CamcorderProfile profile) {
+        MediaFormat videoEncoderFormat = MediaFormat.createVideoFormat(VIDEO_MIME, profile.videoFrameWidth, profile.videoFrameHeight);
+        videoEncoderFormat.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface);
+        videoEncoderFormat.setInteger(MediaFormat.KEY_BIT_RATE, profile.videoBitRate);
+        videoEncoderFormat.setInteger(MediaFormat.KEY_FRAME_RATE, profile.videoFrameRate);
+        videoEncoderFormat.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, I_FRAME_INTERVAL);
+        videoEncoderFormat.setString(MediaFormat.KEY_MIME, VIDEO_MIME);
+
+        return videoEncoderFormat;
+    }
+
     public void start() {
         if ((audioEnabled && audioThread.isAlive()) || videoThread.isAlive()) {
             return; // TODO: throw error already videoing or not complete videoing
         }
-
 
         videoEncoder.start();
         if (audioEnabled) {
@@ -158,12 +178,10 @@ public class Recorder {
             audioEncoder.start();
         }
 
-
         videoThread.start();
         if (audioEnabled) {
             audioThread.start();
         }
-
     }
 
     public void stop() {
@@ -214,8 +232,8 @@ public class Recorder {
      * initializes encoder with muxer and continuously encodes
      */
     private void videoLoop() {
-
         initializeVideoEncoder();
+
         try {
             waitAudioEncoderInitialized();
 
@@ -224,16 +242,13 @@ public class Recorder {
             while (!stopped) {
                 writeVideo();
             }
-
         } catch (InterruptedException e) {
             Log.e(TAG, "Video loop interrupeted ", e);
         }
     }
 
     private void audioLoop() {
-
         try {
-
             waitVideoEncoderInitialized();
             initializeAudioEncoder();
             waitForVideoFirstFrame();
@@ -253,8 +268,6 @@ public class Recorder {
             long elapsedAudio = lastVideoWriteTimeUs - startTimeUs;
             long elapsedVideo = lastAudioWriteTimeUs - startTimeUs;
             Log.d(TAG, "timeCount elapsed Audio=Video: " + usToSeconds(elapsedAudio) + " = " + usToSeconds(elapsedVideo));
-
-
         } catch (InterruptedException e) {
             Log.e(TAG, "Audio loop interrupeted ", e);
         }
