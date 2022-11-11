@@ -347,9 +347,9 @@ class Camera
             cameraFeatureFactory.createAutoFocusFeature(cameraProperties, true));
     cameraFeatures = CameraFeatures.init(
             cameraFeatureFactory, properties, activity, dartMessenger, resolutionPreset);
-    recorder.updateFeatures(cameraFeatures);
 
     try {
+      recorder.updateFeatures(cameraFeatures);
       recorder.setPaused(true);
       captureSession.close();
 
@@ -359,7 +359,7 @@ class Camera
       }
 
       openCamera();
-    } catch (CameraAccessException e) {
+    } catch (CameraAccessException | IOException e) {
       Log.e(TAG, "set description while recording error", e);
       settingDescription = false;
       result.error("setDescription", "Failed to set description", null);
