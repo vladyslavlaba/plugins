@@ -29,9 +29,9 @@ public class Recorder {
     private static final String TAG = "Recorder";
 
     // video
-    private final MediaCodec videoEncoder;
+    private MediaCodec videoEncoder;
     private Surface videoEncoderSurface;
-    private int rotation = 0;
+    private final int rotation;
     private VideoRenderer videoRenderer;
     static final int I_FRAME_INTERVAL = 15;
     static final String VIDEO_MIME = "video/avc";
@@ -59,8 +59,6 @@ public class Recorder {
     private long startTimeUs = -1;
     private boolean paused = false;
 
-    // muxer
-    private final String outputFilePath;
     private final MediaMuxer muxer;
     private final Object muxerLock = new Object();
 
@@ -68,7 +66,7 @@ public class Recorder {
     public Recorder(String outputFilePath, CameraFeatures cameraFeatures, boolean audioEnabled) throws IOException {
         // setup members
         this.audioEnabled = audioEnabled;
-        this.outputFilePath = outputFilePath;
+        // muxer
         final ResolutionFeature resolutionFeature = cameraFeatures.getResolution();
 
         // get initial rotation
@@ -144,12 +142,14 @@ public class Recorder {
         }
     }
 
-    public void updateFeatures(CameraFeatures cameraFeatures) {
+    public void updateFeatures(CameraFeatures cameraFeatures) throws IOException {
         final ResolutionFeature resolutionFeature = cameraFeatures.getResolution();
         CamcorderProfile profile = resolutionFeature.getRecordingProfileLegacy();
 
         MediaFormat videoEncoderFormat = getVideoFormatForProfile(profile);
-        videoEncoder.configure(videoEncoderFormat, videoEncoderSurface, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
+        String encoderName = new MediaCodecList(MediaCodecList.REGULAR_CODECS).findEncoderForFormat(videoEncoderFormat);
+        videoEncoder = MediaCodec.createByCodecName(encoderName);
+        videoEncoder.configure(videoEncoderFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
         videoEncoderSurface = videoEncoder.createInputSurface();
 
         videoRenderer = new VideoRenderer(videoEncoderSurface, profile.videoFrameWidth, profile.videoFrameHeight);
@@ -413,6 +413,7 @@ public class Recorder {
         if (stopped || stoppedVideo) {
             return;
         }
+
         // write encoded video
         MediaCodec.BufferInfo videoInfo = new MediaCodec.BufferInfo();
         int videoIndex = videoEncoder.dequeueOutputBuffer(videoInfo, -1);
@@ -427,7 +428,6 @@ public class Recorder {
         }
 
         try {
-
             // assert valid buffer
             if (videoIndex < 0) {
                 throw new RuntimeException("Video output buffer not available");
