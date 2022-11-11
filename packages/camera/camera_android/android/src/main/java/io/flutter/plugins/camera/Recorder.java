@@ -156,9 +156,9 @@ public class Recorder {
 
         videoRenderer = new VideoRenderer(videoEncoderSurface, profile.videoFrameWidth, profile.videoFrameHeight);
         videoRenderer.setRotation(rotation);
-        videoEncoder.start();
 
         initializeVideoEncoder();
+        videoEncoder.start();
 
         stopped = false;
     }
