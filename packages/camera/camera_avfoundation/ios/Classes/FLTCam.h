@@ -50,6 +50,8 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)captureToFile:(FLTThreadSafeFlutterResult *)result API_AVAILABLE(ios(10));
 - (void)close;
 - (void)startVideoRecordingWithResult:(FLTThreadSafeFlutterResult *)result;
+- (void)setDescriptionWhileVideoRecording:(NSString *)cameraName
+                            result:(FLTThreadSafeFlutterResult *)result;
 - (void)stopVideoRecordingWithResult:(FLTThreadSafeFlutterResult *)result;
 - (void)pauseVideoRecordingWithResult:(FLTThreadSafeFlutterResult *)result;
 - (void)resumeVideoRecordingWithResult:(FLTThreadSafeFlutterResult *)result;

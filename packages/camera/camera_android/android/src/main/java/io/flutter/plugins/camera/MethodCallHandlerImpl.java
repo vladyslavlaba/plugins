@@ -136,6 +136,14 @@ final class MethodCallHandlerImpl implements MethodChannel.MethodCallHandler {
           camera.resumeVideoRecording(result);
           break;
         }
+      case "setDescriptionWhileRecording":
+      {
+        try {
+          setDescriptionWhileRecording(call, result);
+        } catch (Exception e) {
+          handleException(e, result);
+        }
+      }
       case "setFlashMode":
         {
           String modeStr = call.argument("mode");
@@ -396,6 +404,14 @@ final class MethodCallHandlerImpl implements MethodChannel.MethodCallHandler {
     Map<String, Object> reply = new HashMap<>();
     reply.put("cameraId", flutterSurfaceTexture.id());
     result.success(reply);
+  }
+
+  private void setDescriptionWhileRecording(MethodCall call, Result result) throws CameraAccessException {
+    String cameraName = call.argument("cameraName");
+    CameraProperties cameraProperties =
+            new CameraPropertiesImpl(cameraName, CameraUtils.getCameraManager(activity));
+
+    camera.setDescriptionWhileRecording(result,cameraProperties);
   }
 
   // We move catching CameraAccessException out of onMethodCall because it causes a crash
