@@ -148,6 +148,8 @@ public class Recorder {
 
         MediaFormat videoEncoderFormat = getVideoFormatForProfile(profile);
         String encoderName = new MediaCodecList(MediaCodecList.REGULAR_CODECS).findEncoderForFormat(videoEncoderFormat);
+        stopped = true;
+
         videoEncoder = MediaCodec.createByCodecName(encoderName);
         videoEncoder.configure(videoEncoderFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
         videoEncoderSurface = videoEncoder.createInputSurface();
@@ -156,6 +158,8 @@ public class Recorder {
         videoRenderer.setRotation(rotation);
 
         initializeVideoEncoder();
+
+        stopped = false;
     }
 
     private MediaFormat getVideoFormatForProfile(CamcorderProfile profile) {
